@@ -7,10 +7,26 @@
 import UIKit
 
 final class BouncingBoxView: UIView {
+    static let highScoreDefaultsKey = "highScore"
+
+    private struct Particle {
+        let layer: CAShapeLayer
+        let velocity: CGPoint
+    }
+
+    private var particles: [Particle] = []
+    
+    private(set) var highScore: Int = 0
+    
     private let collisionSoundPlayer = CollisionSoundPlayer()
 
     var onScoreUpdate: ((Int) -> Void) = { _ in }
     var onStateUpdate: ((GameState) -> Void) = { _ in }
+    var onHighScoreUpdate: ((Int) -> Void) = { _ in } {
+        didSet {
+            onHighScoreUpdate(highScore)
+        }
+    }
 
     private let boxLayer = CAShapeLayer()
     private let boxSize: CGFloat = 50
@@ -22,6 +38,7 @@ final class BouncingBoxView: UIView {
 
     private var targetRect = CGRect(x: 200, y: 300, width: 40, height: 40)
     private let targetLayer = CAShapeLayer()
+    private var lastLaidOutBoundsSize: CGSize = .zero
     private var score: Int = 0
     private var gameState: GameState = .menu
 
@@ -33,26 +50,28 @@ final class BouncingBoxView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-
+        
         isOpaque = true
         backgroundColor = .black
-
+        
         boxLayer.fillColor = UIColor.clear.cgColor
         boxLayer.strokeColor = UIColor.white.cgColor
         boxLayer.lineWidth = 3
         layer.addSublayer(boxLayer)
-
+        
         targetLayer.fillColor = UIColor.systemRed.cgColor
         targetLayer.strokeColor = UIColor.white.cgColor
         targetLayer.lineWidth = 2
         layer.addSublayer(targetLayer)
         updateTargetLayer()
-
+        
         let panGesture = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         panGesture.minimumNumberOfTouches = 1
         addGestureRecognizer(panGesture)
-
+        
         addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleTap(_:))))
+        loadHighScore()
+
     }
 
     required init?(coder: NSCoder) {
@@ -78,7 +97,11 @@ final class BouncingBoxView: UIView {
 
         clampPosition()
         updateBoxLayer()
-        spawnTarget()
+
+        if bounds.size != lastLaidOutBoundsSize {
+            lastLaidOutBoundsSize = bounds.size
+            spawnTarget()
+        }
     }
 
     func startGame() {
@@ -95,6 +118,19 @@ final class BouncingBoxView: UIView {
         gameState = .gameOver
         onStateUpdate(gameState)
         stopDisplayLink()
+        saveHighScore()
+    }
+
+    private func loadHighScore() {
+        highScore = UserDefaults.standard.integer(forKey: Self.highScoreDefaultsKey)
+    }
+
+    private func saveHighScore() {
+        if score > highScore {
+            highScore = score
+            UserDefaults.standard.set(highScore, forKey: Self.highScoreDefaultsKey)
+            onHighScoreUpdate(highScore)
+        }
     }
 
     private func startDisplayLink() {
@@ -138,6 +174,7 @@ final class BouncingBoxView: UIView {
 
         bounce()
         updateBoxLayer()
+        updateParticles()
         checkCollisions()
     }
 
@@ -222,8 +259,48 @@ final class BouncingBoxView: UIView {
         if playerRect.intersects(targetRect) {
             score += 1
             onScoreUpdate(score)
+            let collisionPoint = CGPoint(x: targetRect.midX, y: targetRect.midY)
+            
             collisionSoundPlayer.play()
             spawnTarget()
+            spawnParticles(at: collisionPoint)
+            saveHighScore()
+        }
+    }
+    
+    private func spawnParticles(at point: CGPoint) {
+        for _ in 0..<8 {
+            let particle = CAShapeLayer()
+            particle.path = UIBezierPath(rect: CGRect(x: 0, y: 0, width: 6, height: 6)).cgPath
+            particle.fillColor = UIColor.systemYellow.cgColor
+            particle.position = point
+            particle.opacity = 1.0
+            layer.addSublayer(particle)
+            
+            let angle = CGFloat.random(in: 0..<2 * .pi)
+            let speed = CGFloat.random(in: 100..<300)
+            particles.append(
+                Particle(
+                    layer: particle,
+                    velocity: CGPoint(x: cos(angle) * speed, y: sin(angle) * speed)
+                )
+            )
+        }
+    }
+    
+    private func updateParticles() {
+        for index in particles.indices.reversed() {
+            let particle = particles[index]
+            var position = particle.layer.position
+            position.x += particle.velocity.x * 0.016 // ~60fps delta
+            position.y += particle.velocity.y * 0.016
+            particle.layer.position = position
+            particle.layer.opacity -= 0.04
+            
+            if particle.layer.opacity <= 0 {
+                particle.layer.removeFromSuperlayer()
+                particles.remove(at: index)
+            }
         }
     }
 }

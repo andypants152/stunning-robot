@@ -9,11 +9,14 @@ import SwiftUI
 struct ContentView: View {
     @State private var currentScore: Int = 0
     @State private var currentState: BouncingBoxView.GameState = .menu
+    @AppStorage(BouncingBoxView.highScoreDefaultsKey) private var currentHighScore: Int = 0
+
 
     var body: some View {
         ZStack {
             BouncingBoxRepresentable(
                 onScoreUpdate: { currentScore = $0 },
+                onHighScoreUpdate: { currentHighScore = $0 },
                 onStateUpdate: { currentState = $0 }
             )
             .ignoresSafeArea()
@@ -22,7 +25,14 @@ struct ContentView: View {
                 Text("Score: \(currentScore)")
                     .font(.title)
                     .foregroundStyle(.white)
-                    .padding()
+                    .padding(.top, 50)
+                
+                Text("Best: \(currentHighScore)")
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.7))
+                                .padding(.top, 4)
+
+                Spacer()
 
                 if currentState == .menu {
                     Text("Tap to Start")
