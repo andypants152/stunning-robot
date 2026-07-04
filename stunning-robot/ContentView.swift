@@ -8,22 +8,46 @@ import SwiftUI
 import UIKit
 
 struct ContentView: View {
+    @State private var currentScore: Int = 0
+    
     var body: some View {
-        BouncingBoxRepresentable()
+        ZStack {
+
+            BouncingBoxRepresentable(
+                onScoreUpdate: { currentScore = $0}
+            )
             .ignoresSafeArea()
+        
+        
+            VStack {
+                Text("Score: \(currentScore)")
+                    .font(.title)
+                    .foregroundStyle(.white)
+                    .padding()
+            }
+        }
     }
 }
 
 struct BouncingBoxRepresentable: UIViewRepresentable {
+    let onScoreUpdate: (Int) -> Void
+
     func makeUIView(context: Context) -> BouncingBoxView {
-        BouncingBoxView()
+        let view = BouncingBoxView()
+        view.onScoreUpdate = onScoreUpdate
+        return view
     }
     
     func updateUIView(_ uiView: BouncingBoxView, context: Context) {
+        uiView.onScoreUpdate = onScoreUpdate
     }
 }
 
 final class BouncingBoxView: UIView {
+    // ✅ BRIDGES TO SWIFTUI
+    var onScoreUpdate: ((Int) -> Void) = { _ in }
+    var onStateUpdate: ((GameState) -> Void) = { _ in }
+    
     private let boxLayer = CAShapeLayer()
     private let boxSize: CGFloat = 50
     
@@ -31,6 +55,13 @@ final class BouncingBoxView: UIView {
     private var lastTimestamp: CFTimeInterval?
     private var position = CGPoint(x: 120, y: 120)
     private var velocity = CGPoint(x: 240, y: 180)
+    
+    private var targetRect = CGRect(x: 200, y: 300, width: 40, height: 40)
+    private var targetLayer = CAShapeLayer()
+    private var score: Int = 0
+    private var gameState: GameState = .menu // Add enum below
+
+    enum GameState { case menu, playing, gameOver }
     
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -42,6 +73,12 @@ final class BouncingBoxView: UIView {
         boxLayer.strokeColor = UIColor.white.cgColor
         boxLayer.lineWidth = 3
         layer.addSublayer(boxLayer)
+        
+        targetLayer.fillColor = UIColor.systemRed.cgColor
+        targetLayer.strokeColor = UIColor.white.cgColor
+        targetLayer.lineWidth = 2
+        layer.addSublayer(targetLayer)
+        updateTargetLayer()
         
         let panGesture = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         panGesture.minimumNumberOfTouches = 1
@@ -71,6 +108,25 @@ final class BouncingBoxView: UIView {
         
         clampPosition()
         updateBoxLayer()
+        
+        spawnTarget()
+    }
+    
+    // ✅ START/STOP & STATE MANAGEMENT
+    func startGame() {
+        gameState = .playing
+        position = CGPoint(x: bounds.width/2 - boxSize/2, y: bounds.height/2 - boxSize/2)
+        velocity = CGPoint(x: 240, y: 180)
+        score = 0
+        onScoreUpdate(score)
+        onStateUpdate(gameState)
+        startDisplayLink()
+    }
+    
+    func stopGame() {
+        gameState = .gameOver
+        onStateUpdate(gameState)
+        stopDisplayLink()
     }
     
     private func startDisplayLink() {
@@ -113,6 +169,8 @@ final class BouncingBoxView: UIView {
         
         bounce()
         updateBoxLayer()
+        checkCollisions()
+
     }
     
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
@@ -172,4 +230,26 @@ final class BouncingBoxView: UIView {
         ).cgPath
         CATransaction.commit()
     }
+    
+    private func updateTargetLayer() {
+        targetLayer.path = UIBezierPath(rect: targetRect).cgPath
+    }
+
+    private func spawnTarget() {
+            let minX: CGFloat = 50
+            let maxX = max(minX + 1, bounds.width - 90)
+            let maxY = max(minX + 1, bounds.height - 90)
+            targetRect.origin = CGPoint(x: CGFloat.random(in: minX..<maxX), y: CGFloat.random(in: minX..<maxY))
+            updateTargetLayer()
+        }
+
+    private func checkCollisions() {
+            let playerRect = CGRect(x: position.x, y: position.y, width: boxSize, height: boxSize)
+            if playerRect.intersects(targetRect) {
+                score += 1
+                onScoreUpdate(score) // ✅ Pushes to SwiftUI
+                spawnTarget()
+            }
+        }
+    
 }
