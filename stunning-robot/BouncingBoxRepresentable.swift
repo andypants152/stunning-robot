@@ -7,6 +7,7 @@
 import SwiftUI
 
 struct BouncingBoxRepresentable: UIViewRepresentable {
+    let isSceneActive: Bool
     let onScoreUpdate: (Int) -> Void
     let onHighScoreUpdate: ((Int) -> Void)
     let onStateUpdate: (BouncingBoxView.GameState) -> Void
@@ -16,6 +17,7 @@ struct BouncingBoxRepresentable: UIViewRepresentable {
         view.onScoreUpdate = onScoreUpdate
         view.onHighScoreUpdate = onHighScoreUpdate
         view.onStateUpdate = onStateUpdate
+        view.setSceneActive(isSceneActive)
         return view
     }
 
@@ -23,5 +25,6 @@ struct BouncingBoxRepresentable: UIViewRepresentable {
         uiView.onScoreUpdate = onScoreUpdate
         uiView.onStateUpdate = onStateUpdate
         uiView.onHighScoreUpdate = onHighScoreUpdate
+        uiView.setSceneActive(isSceneActive)
     }
 }

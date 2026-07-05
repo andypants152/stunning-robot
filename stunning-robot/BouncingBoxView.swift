@@ -9,35 +9,26 @@ import UIKit
 final class BouncingBoxView: UIView {
     static let highScoreDefaultsKey = "highScore"
 
-    private struct Particle {
-        let layer: CAShapeLayer
-        let velocity: CGPoint
-    }
-
-    private var particles: [Particle] = []
-    
     private(set) var highScore: Int = 0
-    
-    private let collisionSoundPlayer = CollisionSoundPlayer()
 
     var onScoreUpdate: ((Int) -> Void) = { _ in }
     var onStateUpdate: ((GameState) -> Void) = { _ in }
-    var onHighScoreUpdate: ((Int) -> Void) = { _ in } {
-        didSet {
-            onHighScoreUpdate(highScore)
-        }
-    }
+    // Removed flawed didSet; SwiftUI handles persistence via @AppStorage
+    var onHighScoreUpdate: ((Int) -> Void) = { _ in }
 
     private let boxLayer = CAShapeLayer()
     private let boxSize: CGFloat = 50
+    private let targetSize: CGFloat = 40
+
+    private lazy var physicsEngine = PhysicsEngine(
+        initialPosition: CGPoint(x: 120, y: 120),
+        initialVelocity: CGPoint(x: 240, y: 180),
+        boxSize: boxSize
+    )
+    private lazy var targetManager = TargetManager(targetSize: targetSize)
 
     private var displayLink: CADisplayLink?
     private var lastTimestamp: CFTimeInterval?
-    private var position = CGPoint(x: 120, y: 120)
-    private var velocity = CGPoint(x: 240, y: 180)
-
-    private var targetRect = CGRect(x: 200, y: 300, width: 40, height: 40)
-    private let targetLayer = CAShapeLayer()
     private var lastLaidOutBoundsSize: CGSize = .zero
     private var score: Int = 0
     private var gameState: GameState = .menu
@@ -50,28 +41,23 @@ final class BouncingBoxView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        
+
         isOpaque = true
         backgroundColor = .black
-        
+        clipsToBounds = false // Prevents clipping labels added by TargetManager
+
         boxLayer.fillColor = UIColor.clear.cgColor
         boxLayer.strokeColor = UIColor.white.cgColor
         boxLayer.lineWidth = 3
+        boxLayer.frame = bounds
         layer.addSublayer(boxLayer)
-        
-        targetLayer.fillColor = UIColor.systemRed.cgColor
-        targetLayer.strokeColor = UIColor.white.cgColor
-        targetLayer.lineWidth = 2
-        layer.addSublayer(targetLayer)
-        updateTargetLayer()
-        
+
         let panGesture = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         panGesture.minimumNumberOfTouches = 1
         addGestureRecognizer(panGesture)
-        
+
         addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleTap(_:))))
         loadHighScore()
-
     }
 
     required init?(coder: NSCoder) {
@@ -85,55 +71,74 @@ final class BouncingBoxView: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
 
-        if window == nil {
-            stopDisplayLink()
-        } else {
+        if window != nil && gameState == .playing {
             startDisplayLink()
+        } else {
+            stopDisplayLink()
         }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        clampPosition()
+        physicsEngine.clampPosition(in: bounds)
         updateBoxLayer()
 
         if bounds.size != lastLaidOutBoundsSize {
             lastLaidOutBoundsSize = bounds.size
-            spawnTarget()
+            if gameState == .playing {
+                spawnAllTargets()
+            }
         }
     }
 
     func startGame() {
         gameState = .playing
-        position = CGPoint(x: bounds.width / 2 - boxSize / 2, y: bounds.height / 2 - boxSize / 2)
-        velocity = CGPoint(x: 240, y: 180)
+        physicsEngine.reset(
+            position: CGPoint(x: bounds.width / 2 - boxSize / 2, y: bounds.height / 2 - boxSize / 2),
+            velocity: CGPoint(x: 240, y: 180)
+        )
         score = 0
         onScoreUpdate(score)
         onStateUpdate(gameState)
+        physicsEngine.removeAllParticles()
         startDisplayLink()
+        spawnAllTargets()
     }
 
     func stopGame() {
         gameState = .gameOver
         onStateUpdate(gameState)
         stopDisplayLink()
-        saveHighScore()
+        targetManager.removeAllTargets()
+        physicsEngine.removeAllParticles()
+    }
+
+    func setSceneActive(_ isActive: Bool) {
+        if isActive {
+            if gameState == .playing {
+                startDisplayLink()
+            }
+        } else {
+            stopDisplayLink()
+        }
     }
 
     private func loadHighScore() {
         highScore = UserDefaults.standard.integer(forKey: Self.highScoreDefaultsKey)
+        onHighScoreUpdate(highScore)
     }
 
+    // Removed direct UserDefaults.save; @AppStorage in ContentView handles persistence
     private func saveHighScore() {
         if score > highScore {
             highScore = score
-            UserDefaults.standard.set(highScore, forKey: Self.highScoreDefaultsKey)
             onHighScoreUpdate(highScore)
         }
     }
 
     private func startDisplayLink() {
+        guard window != nil, gameState == .playing else { return }
         guard displayLink == nil else { return }
 
         let link = CADisplayLink(target: self, selector: #selector(step(_:)))
@@ -169,12 +174,11 @@ final class BouncingBoxView: UIView {
         }
 
         let elapsed = min(displayLink.timestamp - lastTimestamp, 1.0 / 15.0)
-        position.x += velocity.x * elapsed
-        position.y += velocity.y * elapsed
-
-        bounce()
+        if physicsEngine.update(dt: elapsed, bounds: bounds) {
+            awardCornerBonus()
+        }
         updateBoxLayer()
-        updateParticles()
+        physicsEngine.updateParticles(dt: elapsed)
         checkCollisions()
     }
 
@@ -183,9 +187,9 @@ final class BouncingBoxView: UIView {
 
         switch gesture.state {
         case .began, .changed:
-            velocity = gestureVelocity
+            physicsEngine.velocity = gestureVelocity
         case .ended:
-            velocity = CGPoint(
+            physicsEngine.velocity = CGPoint(
                 x: gestureVelocity.x * 1.2,
                 y: gestureVelocity.y * 1.2
             )
@@ -200,106 +204,51 @@ final class BouncingBoxView: UIView {
         }
     }
 
-    private func bounce() {
-        let maxX = bounds.width - boxSize
-        let maxY = bounds.height - boxSize
-
-        if position.x <= 0 {
-            position.x = 0
-            velocity.x = abs(velocity.x)
-        } else if position.x >= maxX {
-            position.x = maxX
-            velocity.x = -abs(velocity.x)
-        }
-
-        if position.y <= 0 {
-            position.y = 0
-            velocity.y = abs(velocity.y)
-        } else if position.y >= maxY {
-            position.y = maxY
-            velocity.y = -abs(velocity.y)
-        }
-    }
-
-    private func clampPosition() {
-        guard bounds.width > boxSize, bounds.height > boxSize else { return }
-
-        position.x = min(max(position.x, 0), bounds.width - boxSize)
-        position.y = min(max(position.y, 0), bounds.height - boxSize)
+    private func awardCornerBonus() {
+        score += 100
+        onScoreUpdate(score)
+        saveHighScore()
+        physicsEngine.spawnCornerConfetti(in: bounds, parentLayer: layer)
     }
 
     private func updateBoxLayer() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        boxLayer.path = UIBezierPath(
-            rect: CGRect(
-                x: position.x,
-                y: position.y,
-                width: boxSize,
-                height: boxSize
-            )
-        ).cgPath
+        boxLayer.path = UIBezierPath(rect: physicsEngine.playerRect).cgPath
         CATransaction.commit()
     }
 
-    private func updateTargetLayer() {
-        targetLayer.path = UIBezierPath(rect: targetRect).cgPath
-    }
-
-    private func spawnTarget() {
-        let minX: CGFloat = 50
-        let maxX = max(minX + 1, bounds.width - 90)
-        let maxY = max(minX + 1, bounds.height - 90)
-        targetRect.origin = CGPoint(x: CGFloat.random(in: minX..<maxX), y: CGFloat.random(in: minX..<maxY))
-        updateTargetLayer()
+    private func spawnAllTargets() {
+        targetManager.spawnAll(
+            bounds: bounds,
+            playerRect: physicsEngine.playerRect,
+            parentLayer: layer,
+            parentView: self
+        )
     }
 
     private func checkCollisions() {
-        let playerRect = CGRect(x: position.x, y: position.y, width: boxSize, height: boxSize)
-        if playerRect.intersects(targetRect) {
-            score += 1
-            onScoreUpdate(score)
-            let collisionPoint = CGPoint(x: targetRect.midX, y: targetRect.midY)
-            
-            collisionSoundPlayer.play()
-            spawnTarget()
-            spawnParticles(at: collisionPoint)
+        let updatedScore = targetManager.checkCollisions(
+            playerRect: physicsEngine.playerRect,
+            score: score,
+            physicsEngine: physicsEngine,
+            parentLayer: layer,
+            onScoreUpdate: onScoreUpdate,
+            triggerPenaltyFlash: triggerPenaltyFlash
+        )
+
+        if updatedScore != score {
+            score = updatedScore
             saveHighScore()
         }
     }
-    
-    private func spawnParticles(at point: CGPoint) {
-        for _ in 0..<8 {
-            let particle = CAShapeLayer()
-            particle.path = UIBezierPath(rect: CGRect(x: 0, y: 0, width: 6, height: 6)).cgPath
-            particle.fillColor = UIColor.systemYellow.cgColor
-            particle.position = point
-            particle.opacity = 1.0
-            layer.addSublayer(particle)
-            
-            let angle = CGFloat.random(in: 0..<2 * .pi)
-            let speed = CGFloat.random(in: 100..<300)
-            particles.append(
-                Particle(
-                    layer: particle,
-                    velocity: CGPoint(x: cos(angle) * speed, y: sin(angle) * speed)
-                )
-            )
-        }
-    }
-    
-    private func updateParticles() {
-        for index in particles.indices.reversed() {
-            let particle = particles[index]
-            var position = particle.layer.position
-            position.x += particle.velocity.x * 0.016 // ~60fps delta
-            position.y += particle.velocity.y * 0.016
-            particle.layer.position = position
-            particle.layer.opacity -= 0.04
-            
-            if particle.layer.opacity <= 0 {
-                particle.layer.removeFromSuperlayer()
-                particles.remove(at: index)
+
+    private func triggerPenaltyFlash() {
+        UIView.animate(withDuration: 0.1, animations: {
+            self.backgroundColor = .systemRed
+        }) { _ in
+            UIView.animate(withDuration: 0.3) {
+                self.backgroundColor = .black
             }
         }
     }

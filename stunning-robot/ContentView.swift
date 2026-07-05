@@ -7,14 +7,16 @@
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
+
     @State private var currentScore: Int = 0
     @State private var currentState: BouncingBoxView.GameState = .menu
     @AppStorage(BouncingBoxView.highScoreDefaultsKey) private var currentHighScore: Int = 0
 
-
     var body: some View {
         ZStack {
             BouncingBoxRepresentable(
+                isSceneActive: scenePhase == .active,
                 onScoreUpdate: { currentScore = $0 },
                 onHighScoreUpdate: { currentHighScore = $0 },
                 onStateUpdate: { currentState = $0 }
@@ -26,11 +28,11 @@ struct ContentView: View {
                     .font(.title)
                     .foregroundStyle(.white)
                     .padding(.top, 50)
-                
+
                 Text("Best: \(currentHighScore)")
-                                .font(.subheadline)
-                                .foregroundStyle(.white.opacity(0.7))
-                                .padding(.top, 4)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.7))
+                    .padding(.top, 4)
 
                 Spacer()
 
@@ -42,9 +44,9 @@ struct ContentView: View {
                     Text("Tap to Restart")
                         .font(.title)
                         .foregroundStyle(.orange)
-                        .onTapGesture { }
                 }
             }
+            .allowsHitTesting(false)
         }
     }
 }

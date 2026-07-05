@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct stunning_robotApp: App {
+struct StunningRobotApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

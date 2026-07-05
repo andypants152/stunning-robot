@@ -13,32 +13,30 @@ final class CollisionSoundPlayer {
 
     init() {
         setupAudioSession()
-        setupPlayer()
     }
 
-    func play() {
-        guard let player else { return }
-
-        player.currentTime = 0
-        player.play()
+    func play(for type: TargetType = .green) {
+        // Activate session only when playing, not on init, to respect system audio routing
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+        try? session.setActive(true)
+        
+        let data = makeSoundData(for: type)
+        self.soundData = data
+        
+        // Keep the player alive for the duration of playback.
+        player = try? AVAudioPlayer(data: data)
+        player?.volume = 1.0
+        player?.prepareToPlay()
+        player?.play()
     }
 
     private func setupAudioSession() {
-        let audioSession = AVAudioSession.sharedInstance()
-        try? audioSession.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
-        try? audioSession.setActive(true)
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
     }
 
-    private func setupPlayer() {
-        let soundData = makeCollisionSoundData()
-        self.soundData = soundData
-
-        player = try? AVAudioPlayer(data: soundData)
-        player?.volume = 1.0
-        player?.prepareToPlay()
-    }
-
-    private func makeCollisionSoundData() -> Data {
+    private func makeSoundData(for type: TargetType) -> Data {
         let sampleRate = 44_100
         let duration = 0.18
         let sampleCount = Int(Double(sampleRate) * duration)
@@ -62,18 +60,31 @@ final class CollisionSoundPlayer {
         data.appendString("data")
         data.appendUInt32(UInt32(dataSize))
 
+        let (baseFreq, modRate, modDepth, decayRate) = audioParams(for: type)
+
         for sampleIndex in 0..<sampleCount {
             let t = Double(sampleIndex) / Double(sampleRate)
-            let amplitude = exp(-t * 14.0) * 0.9
-            let freq = 700.0 + sin(t * 70.0) * 260.0
+            let amplitude = exp(-t * decayRate) * 0.9
+            let freq = baseFreq + sin(t * modRate) * modDepth
             let sample = Int16((amplitude * sin(2.0 * Double.pi * freq * t)) * Double(Int16.max))
             data.appendInt16(sample)
         }
 
         return data
     }
+
+    private func audioParams(for type: TargetType) -> (baseFreq: Double, modRate: Double, modDepth: Double, decayRate: Double) {
+        switch type {
+        case .green:  return (700.0, 70.0, 260.0, 14.0)
+        case .blue:   return (880.0, 90.0, 180.0, 12.0)
+        case .red:    return (320.0, 40.0, 120.0, 18.0)
+        case .purple: return (1200.0, 110.0, 350.0, 10.0)
+        case .yellow: return (550.0, 60.0, 200.0, 16.0)
+        }
+    }
 }
 
+// Keep your existing Data extensions exactly as-is
 private extension Data {
     mutating func appendString(_ string: String) {
         append(contentsOf: string.utf8)
