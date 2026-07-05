@@ -8,12 +8,12 @@ import UIKit
 
 final class BouncingBoxView: UIView {
     static let highScoreDefaultsKey = "highScore"
+    private let maxFlickSpeed: CGFloat = 1000 // Caps flick speed to prevent tunneling/glitches
 
     private(set) var highScore: Int = 0
 
     var onScoreUpdate: ((Int) -> Void) = { _ in }
     var onStateUpdate: ((GameState) -> Void) = { _ in }
-    // Removed flawed didSet; SwiftUI handles persistence via @AppStorage
     var onHighScoreUpdate: ((Int) -> Void) = { _ in }
 
     private let boxLayer = CAShapeLayer()
@@ -44,7 +44,7 @@ final class BouncingBoxView: UIView {
 
         isOpaque = true
         backgroundColor = .black
-        clipsToBounds = false // Prevents clipping labels added by TargetManager
+        clipsToBounds = false
 
         boxLayer.fillColor = UIColor.clear.cgColor
         boxLayer.strokeColor = UIColor.white.cgColor
@@ -57,6 +57,7 @@ final class BouncingBoxView: UIView {
         addGestureRecognizer(panGesture)
 
         addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleTap(_:))))
+        
         loadHighScore()
     }
 
@@ -68,15 +69,8 @@ final class BouncingBoxView: UIView {
         stopDisplayLink()
     }
 
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-
-        if window != nil && gameState == .playing {
-            startDisplayLink()
-        } else {
-            stopDisplayLink()
-        }
-    }
+    // Note: didMoveToWindow is intentionally omitted. 
+    // SwiftUI's scenePhase via setSceneActive() is the authoritative source for pausing/resuming.
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -129,7 +123,6 @@ final class BouncingBoxView: UIView {
         onHighScoreUpdate(highScore)
     }
 
-    // Removed direct UserDefaults.save; @AppStorage in ContentView handles persistence
     private func saveHighScore() {
         if score > highScore {
             highScore = score
@@ -138,7 +131,7 @@ final class BouncingBoxView: UIView {
     }
 
     private func startDisplayLink() {
-        guard window != nil, gameState == .playing else { return }
+        guard gameState == .playing else { return }
         guard displayLink == nil else { return }
 
         let link = CADisplayLink(target: self, selector: #selector(step(_:)))
@@ -173,7 +166,8 @@ final class BouncingBoxView: UIView {
             return
         }
 
-        let elapsed = min(displayLink.timestamp - lastTimestamp, 1.0 / 15.0)
+        // Tightened dt clamp to further prevent tunneling during high-speed or background/foreground transitions
+        let elapsed = min(displayLink.timestamp - lastTimestamp, 1.0 / 30.0)
         if physicsEngine.update(dt: elapsed, bounds: bounds) {
             awardCornerBonus()
         }
@@ -184,18 +178,25 @@ final class BouncingBoxView: UIView {
 
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
         let gestureVelocity = gesture.velocity(in: self)
+        var velocity = gestureVelocity
 
         switch gesture.state {
         case .began, .changed:
-            physicsEngine.velocity = gestureVelocity
-        case .ended:
-            physicsEngine.velocity = CGPoint(
-                x: gestureVelocity.x * 1.2,
-                y: gestureVelocity.y * 1.2
-            )
-        default:
             break
+        case .ended:
+            velocity = CGPoint(x: gestureVelocity.x * 1.2, y: gestureVelocity.y * 1.2)
+        default:
+            return
         }
+
+        // Cap velocity to prevent tunneling and physics glitches
+        let magnitude = sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
+        if magnitude > maxFlickSpeed {
+            let scale = maxFlickSpeed / magnitude
+            velocity = CGPoint(x: velocity.x * scale, y: velocity.y * scale)
+        }
+        
+        physicsEngine.velocity = velocity
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
